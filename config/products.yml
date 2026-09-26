@@ -1,0 +1,10 @@
+# Add one entry per Akakçe product page you want to monitor.
+# Each product needs a unique id, a name (shown in notifications) and the url.
+products:
+  # - id: unique-id
+  #   name: Product display name
+  #   url: https://www.akakce.com/some-product-fiyati,123456.html
+  #
+  # - id: another-product
+  #   name: Another Product
+  #   url: https://www.akakce.com/...

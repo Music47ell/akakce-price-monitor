@@ -1,0 +1,30 @@
+name: akakce-price-monitor
+
+services:
+  akakce-price-monitor:
+    image: ghcr.io/music47ell/akakce-price-monitor:latest
+    container_name: akakce-price-monitor
+    restart: unless-stopped
+    pull_policy: always
+    init: true
+    shm_size: "1gb"
+    environment:
+      NTFY_URL: ${NTFY_URL}
+      NTFY_TOPIC: ${NTFY_TOPIC}
+      NTFY_TOKEN: ${NTFY_TOKEN:-}
+      CHECK_INTERVAL_SECONDS: ${CHECK_INTERVAL_SECONDS:-21600}
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-30}
+      REQUEST_DELAY_SECONDS: ${REQUEST_DELAY_SECONDS:-3}
+      TOP_DEALS: ${TOP_DEALS:-5}
+      TIMEZONE: ${TIMEZONE:-Europe/Istanbul}
+      PAGE_LOAD_TIMEOUT_SECONDS: ${PAGE_LOAD_TIMEOUT_SECONDS:-60000}
+      STARTUP_TEST: ${STARTUP_TEST:-true}
+    volumes:
+      - /opt/docker/data/akakce-price-monitor:/data
+      - /opt/docker/data/akakce-price-monitor/config:/config
+    networks:
+      - tunnel-net
+
+networks:
+  tunnel-net:
+    external: true
