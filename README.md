@@ -106,6 +106,31 @@ The same cycle also records baselines. This notification is sent only once (the
 next runs are drop-only). Set `STARTUP_TEST=false` to disable it. To run it again,
 delete `/opt/docker/data/akakce-price-monitor/state.json` on the host.
 
+### On-demand test (`--test`)
+
+You can run the same check at any time from the running container, without waiting
+for the interval and without touching saved state:
+
+```bash
+docker exec akakce-price-monitor python -u app.py --test
+```
+
+or, with Compose:
+
+```bash
+docker compose exec akakce-price-monitor python -u app.py --test
+```
+
+`--test` (alias `--check`) fetches every product once, sends a `Test run - …`
+notification with the same `OK`/`FAIL` report (including Cloudflare challenges),
+prints it to the logs, and exits — it does **not** read or write `state.json`, so
+it never affects drop detection or baselines. It exits non-zero if no prices could
+be fetched, which makes it scriptable.
+
+The exec session inherits the container's environment, so `NTFY_URL`/`NTFY_TOPIC`
+(set in Dockhand) are used. If you prefer only manual testing, set
+`STARTUP_TEST=false`.
+
 Add your products to `config/products.yml` **before** the first launch. An empty
 product list is skipped entirely — it does not launch the browser, send a startup
 notification, or write `state.json` — so the startup test still runs on the first

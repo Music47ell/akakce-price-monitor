@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import os
@@ -241,9 +242,9 @@ def build_digest(results):
     return title, "\n".join(lines).strip()
 
 
-def build_startup(results):
+def build_startup(results, title_prefix="Startup test"):
     now = datetime.now(ZoneInfo(TIMEZONE))
-    title = f"Startup test - {now.strftime('%d.%m.%Y')}"
+    title = f"{title_prefix} - {now.strftime('%d.%m.%Y')}"
 
     lines = ["Startup check", ""]
     ok = 0
@@ -422,7 +423,50 @@ def run_once():
     logging.debug("Digest:\n%s", body)
 
 
+def run_test():
+    try:
+        products = load_products()
+    except Exception:
+        logging.exception("Could not load product configuration")
+        raise SystemExit(1)
+
+    if not products:
+        logging.error("No products configured in %s; nothing to test.", PRODUCTS_PATH)
+        raise SystemExit(1)
+
+    logging.info("Test run: checking %d product(s)", len(products))
+    results = collect(products)
+    title, body = build_startup(results, title_prefix="Test run")
+
+    try:
+        send_ntfy(title, body)
+        logging.info("Test notification sent: %s", title)
+    except Exception:
+        logging.exception("Could not send test notification")
+
+    logging.info("Test result:\n%s", body)
+
+    if not any(result["offers"] for result in results):
+        logging.error("Test run failed: no prices fetched")
+        raise SystemExit(1)
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Akakçe price monitor")
+    parser.add_argument(
+        "--test",
+        "--check",
+        dest="test",
+        action="store_true",
+        help="Run a one-off price check, send the result, then exit. "
+        "Does not read or write saved state.",
+    )
+    args = parser.parse_args()
+
+    if args.test:
+        run_test()
+        return
+
     while True:
         run_once()
         logging.info("Next check in %d seconds", CHECK_INTERVAL)
