@@ -285,8 +285,11 @@ publishes versioned tags as well.
   cheapest `TOP_DEALS` are included in the notification.
 - Chromium needs shared memory, so the Compose file sets `shm_size: "1gb"` and the
   browser runs with `--no-sandbox` / `--disable-dev-shm-usage`.
-- The image is larger than a plain HTTP scraper (it bundles Chromium). Expect a few
-  hundred MB and a few hundred MB of RAM while a page is rendered.
+- The image bundles only Playwright's **headless shell** (`playwright install
+  --with-deps --only-shell chromium`), not the full Chromium — we always run
+  `headless=True`, so the extra ~430 MB build and its apt caches are skipped.
+  Expect a few hundred MB of image and a few hundred MB of RAM while a page is
+  rendered.
 - Akakçe may serve Cloudflare challenges to some datacenter IPs. If a product logs
   `0 offer(s)`, check the logs; running from a residential connection or adding a
   proxy may be required.
