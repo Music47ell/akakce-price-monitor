@@ -15,10 +15,9 @@ services:
       CHECK_INTERVAL_SECONDS: ${CHECK_INTERVAL_SECONDS:-21600}
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-30}
       REQUEST_DELAY_SECONDS: ${REQUEST_DELAY_SECONDS:-3}
-      TOP_DEALS: ${TOP_DEALS:-5}
+      TOP_DEALS: ${TOP_DEALS:-3}
       TIMEZONE: ${TIMEZONE:-Europe/Istanbul}
       PAGE_LOAD_TIMEOUT_SECONDS: ${PAGE_LOAD_TIMEOUT_SECONDS:-60000}
-      STARTUP_TEST: ${STARTUP_TEST:-true}
     volumes:
       - /opt/docker/data/akakce-price-monitor:/data
       - /opt/docker/data/akakce-price-monitor/config:/config

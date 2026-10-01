@@ -3,9 +3,9 @@
 [![Build and publish image](https://github.com/Music47ell/akakce-price-monitor/actions/workflows/docker.yml/badge.svg)](https://github.com/Music47ell/akakce-price-monitor/actions/workflows/docker.yml)
 
 A small Docker service that periodically renders Akakçe product pages in a
-headless browser, collects every seller offer, and **notifies you on ntfy only
-when a price drops** — sending a single notification listing the dropped
-product(s) with their top 5 deals.
+headless browser, collects every seller offer, and **notifies you on ntfy every
+cycle** with a single message listing each product's top 3 deals and whether its
+price went up, down, or stayed the same.
 
 Because Akakçe loads its full seller list client-side (via a Cloudflare-protected
 API), the page is rendered with a real browser (Playwright/Chromium). This is what
@@ -19,8 +19,9 @@ container.
 
 - Multiple products
 - Full seller list per product, including marketplace sellers
-- Top N deals per dropped product in one notification
-- **Notifications only on a price drop** (no noise when prices are unchanged)
+- Top 3 deals per product in one notification
+- **Per-product direction emoji**: 🟩 down · 🟥 up · ⬜ unchanged
+- **A notification every cycle** (and one on every container restart)
 - Persistent state across container restarts (small JSON file, no database)
 - ntfy with optional Bearer-token authentication
 - Configurable polling interval (default: every 6 hours)
@@ -61,11 +62,10 @@ NTFY_TOKEN=
 CHECK_INTERVAL_SECONDS=21600
 REQUEST_TIMEOUT_SECONDS=30
 REQUEST_DELAY_SECONDS=3
-TOP_DEALS=5
+TOP_DEALS=3
 TIMEZONE=Europe/Istanbul
 PAGE_LOAD_TIMEOUT_SECONDS=60000
 STATE_PATH=/data/state.json
-STARTUP_TEST=true
 ```
 
 | Variable | Default | Description |
@@ -76,40 +76,20 @@ STARTUP_TEST=true
 | `CHECK_INTERVAL_SECONDS` | `21600` | Polling interval (6 hours) |
 | `REQUEST_TIMEOUT_SECONDS` | `30` | HTTP timeout for the ntfy request |
 | `REQUEST_DELAY_SECONDS` | `3` | Delay between products |
-| `TOP_DEALS` | `5` | Number of cheapest deals to include per product |
+| `TOP_DEALS` | `3` | Number of cheapest deals to include per product |
 | `TIMEZONE` | `Europe/Istanbul` | Timezone used for the notification date |
 | `PAGE_LOAD_TIMEOUT_SECONDS` | `60000` | Page load / hydration timeout |
 | `STATE_PATH` | `/data/state.json` | Where the last-seen prices are stored |
-| `STARTUP_TEST` | `true` | Send a one-time startup check notification on the first run |
 
 `compose.yaml` wires these into the container through an `environment:` block that
 references them with `${VAR}` interpolation. This matters for tools like Dockhand,
 which inject stack variables into the `docker compose` process for interpolation
 only — a variable that is not referenced there never reaches the container.
 
-## Startup test
+## On-demand test (`--test`)
 
-On the first run (when no state file exists yet), the service performs a startup
-check and sends a single notification confirming it can actually pull prices —
-useful for catching a Cloudflare challenge right after deployment:
-
-```text
-Startup check
-
-OK   - Product A: 7 deals, cheapest 1.700,00 TL (hepsiburada/<seller>)
-FAIL - Product B: Cloudflare challenge, no prices
-
-1/2 product(s) fetched successfully
-```
-
-The same cycle also records baselines. This notification is sent only once (the
-next runs are drop-only). Set `STARTUP_TEST=false` to disable it. To run it again,
-delete `/opt/docker/data/akakce-price-monitor/state.json` on the host.
-
-### On-demand test (`--test`)
-
-You can run the same check at any time from the running container, without waiting
-for the interval and without touching saved state:
+Run a price check at any time from the running container, without waiting for the
+interval and without touching saved state:
 
 ```bash
 docker exec akakce-price-monitor python -u app.py --test
@@ -122,19 +102,17 @@ docker compose exec akakce-price-monitor python -u app.py --test
 ```
 
 `--test` (alias `--check`) fetches every product once, sends a `Test run - …`
-notification with the same `OK`/`FAIL` report (including Cloudflare challenges),
-prints it to the logs, and exits — it does **not** read or write `state.json`, so
-it never affects drop detection or baselines. It exits non-zero if no prices could
-be fetched, which makes it scriptable.
+notification with an `OK`/`FAIL` report (including Cloudflare challenges), prints it
+to the logs, and exits — it does **not** read or write `state.json`, so it never
+affects the direction shown in the regular notifications. It exits non-zero if no
+prices could be fetched, which makes it scriptable.
 
 The exec session inherits the container's environment, so `NTFY_URL`/`NTFY_TOPIC`
-(set in Dockhand) are used. If you prefer only manual testing, set
-`STARTUP_TEST=false`.
+(set in Dockhand) are used.
 
 Add your products to `config/products.yml` **before** the first launch. An empty
-product list is skipped entirely — it does not launch the browser, send a startup
-notification, or write `state.json` — so the startup test still runs on the first
-cycle that actually has products.
+product list is skipped entirely — it does not launch the browser, send a
+notification, or write `state.json`.
 
 ## Products
 
@@ -156,40 +134,61 @@ products:
 Each product needs a unique `id`, a `name` (used in the notification) and an
 Akakçe product `url`.
 
-## How drops are detected
+## How directions are detected
 
 - Each cycle, the service records the **cheapest offer** for every product in
   `STATE_PATH` (`/data/state.json`, persisted at
   `/opt/docker/data/akakce-price-monitor` on the host).
-- A notification is sent only if the current cheapest price is **lower than the
-  previous recorded cheapest** for at least one product.
-- The first run establishes a baseline and sends nothing.
-- Prices are compared to the last check, so a rise followed by a new lower price
-  will notify. Comparing to the last value (not all-time-low) means a return to a
-  previously seen price can notify again.
+- It compares the current cheapest to the last recorded one and marks each product:
+  - 🟩 **down** — cheaper than the last check
+  - 🟥 **up** — more expensive than the last check
+  - ⬜ **same** — unchanged (within 0.005 TL)
+  - 🆕 **baseline** — first time seen (no previous price)
+  - ⚠️ **failed** — no prices fetched (e.g. a Cloudflare challenge)
+- A notification is sent **every cycle**, whether or not anything changed.
+- This cycle runs immediately on startup, so **restarting the container sends a
+  notification** with the current prices.
 
 No database is required — the state is a tiny JSON file. Delete it to reset all
 baselines.
 
 ## Notifications
 
-Only sent when at least one price dropped. The title is:
+One message is sent every cycle. The title summarizes the directions (counts for
+the directions present):
 
 ```text
-Product price drops - 25.09.2026
+Prices 27.09.2026 - 🟩1 🟥1 ⬜1 🆕1 ⚠️1
 ```
 
-The body lists each dropped product with the change and its top 5 deals:
+The body lists each product with its direction, current cheapest price, change vs.
+the previous check, and its top 3 deals:
 
 ```text
-Product display name
-1.900,00 TL -> 1.700,00 TL (-200,00 TL, -10.5%)
-1. hepsiburada/<seller> - 1.700,00 TL
-2. n11/<seller> - 1.720,00 TL
-3. <seller> - 1.800,00 TL
-4. <seller> - 1.850,00 TL
-5. <seller> - 1.900,00 TL
-https://www.akakce.com/some-product-fiyati,123456.html
+🟩 Bialetti Express 2 Cup - 1.646,10 TL (was 1.737,56 TL, -5.3%)
+   1. Hepsiburada/Venti Gıda - 1.646,10 TL
+   2. n11/ventigida - 1.682,68 TL
+   3. Pazarama/Venti Gıda - 1.737,56 TL
+   https://www.akakce.com/moka-pot/...-936632614.html
+
+🟥 Another Product - 920,00 TL (was 900,00 TL, +2.2%)
+   1. Trendyol/<seller> - 920,00 TL
+   2. Hepsiburada/<seller> - 940,00 TL
+   3. <seller> - 950,00 TL
+   https://www.akakce.com/some-product-fiyati,123456.html
+
+⬜ Third Product - 500,00 TL (unchanged)
+   1. <seller> - 500,00 TL
+   2. <seller> - 510,00 TL
+   3. <seller> - 520,00 TL
+   https://www.akakce.com/...
+
+🆕 New Product - 300,00 TL (baseline)
+   1. <seller> - 300,00 TL
+   https://www.akakce.com/...
+
+⚠️ Broken Product - no prices found
+   https://www.akakce.com/...
 ```
 
 If a product cannot be fetched, its previous price is kept and the cycle continues.
@@ -236,8 +235,8 @@ Stop:
 docker compose down
 ```
 
-The first cycle records baselines (no notification); after that a notification is
-sent whenever a price drops.
+A notification is sent immediately on startup and every `CHECK_INTERVAL_SECONDS`
+after that, so a reminder of the current prices arrives on every restart.
 
 ### Updating
 
@@ -281,7 +280,7 @@ publishes versioned tags as well.
 - Each product page is rendered with headless Chromium (Playwright). Akakçe's
   offers hydrate client-side and end up in the page's `application/ld+json`
   `offers` array, which is parsed for `seller.name` and `price`.
-- Offers are sorted by price; the cheapest is stored for drop detection and the
+- Offers are sorted by price; the cheapest is stored for direction detection and the
   cheapest `TOP_DEALS` are included in the notification.
 - Chromium needs shared memory, so the Compose file sets `shm_size: "1gb"` and the
   browser runs with `--no-sandbox` / `--disable-dev-shm-usage`.

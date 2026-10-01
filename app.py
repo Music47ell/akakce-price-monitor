@@ -39,10 +39,9 @@ NTFY_TOKEN = os.getenv("NTFY_TOKEN", "")
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL_SECONDS", "21600"))
 TIMEOUT = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "30"))
 REQUEST_DELAY = float(os.getenv("REQUEST_DELAY_SECONDS", "3"))
-TOP_DEALS = int(os.getenv("TOP_DEALS", "5"))
+TOP_DEALS = int(os.getenv("TOP_DEALS", "3"))
 TIMEZONE = os.getenv("TIMEZONE", "Europe/Istanbul")
 PAGE_LOAD_TIMEOUT = int(os.getenv("PAGE_LOAD_TIMEOUT_SECONDS", "60000"))
-STARTUP_TEST = os.getenv("STARTUP_TEST", "true").lower() not in ("0", "false", "no")
 USER_AGENT = os.getenv(
     "USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -216,33 +215,67 @@ def format_tl(value):
     return f"{value:,.2f} TL".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-def build_digest(results):
+DIRECTION_EMOJI = {
+    "down": "\U0001F7E9",  # 🟩
+    "up": "\U0001F7E5",  # 🟥
+    "same": "\u2B1C",  # ⬜
+    "baseline": "\U0001F195",  # 🆕
+    "failed": "\u26A0\uFE0F",  # ⚠️
+}
+
+DIRECTION_ORDER = ("down", "up", "same", "baseline", "failed")
+
+
+def build_update(results):
     now = datetime.now(ZoneInfo(TIMEZONE))
-    title = f"Product price drops - {now.strftime('%d.%m.%Y')}"
+
+    counts = {}
+    for result in results:
+        counts[result["direction"]] = counts.get(result["direction"], 0) + 1
+
+    summary = " ".join(
+        f"{DIRECTION_EMOJI[d]}{counts[d]}"
+        for d in DIRECTION_ORDER
+        if counts.get(d)
+    )
+    title = f"Prices {now.strftime('%d.%m.%Y')} - {summary}"
 
     lines = []
     for result in results:
-        previous = result["previous"]
+        emoji = DIRECTION_EMOJI[result["direction"]]
+        direction = result["direction"]
         current = result["current"]
-        drop = previous - current
-        percent = (drop / previous) * 100 if previous else 0
+        previous = result["previous"]
 
-        lines.append(result["name"])
-        lines.append(
-            f"{format_tl(previous)} -> {format_tl(current)} "
-            f"(-{format_tl(drop)}, -{percent:.1f}%)"
-        )
+        if direction == "failed":
+            lines.append(f"{emoji} {result['name']} - no prices found")
+        elif direction == "baseline":
+            lines.append(
+                f"{emoji} {result['name']} - {format_tl(current)} (baseline)"
+            )
+        elif direction == "same":
+            lines.append(
+                f"{emoji} {result['name']} - {format_tl(current)} (unchanged)"
+            )
+        else:
+            percent = (current - previous) / previous * 100
+            lines.append(
+                f"{emoji} {result['name']} - {format_tl(current)} "
+                f"(was {format_tl(previous)}, {percent:+.1f}%)"
+            )
 
         for index, offer in enumerate(result["offers"][:TOP_DEALS], 1):
-            lines.append(f"{index}. {offer['seller']} - {format_tl(offer['price'])}")
+            lines.append(
+                f"   {index}. {offer['seller']} - {format_tl(offer['price'])}"
+            )
 
-        lines.append(result["url"])
+        lines.append(f"   {result['url']}")
         lines.append("")
 
     return title, "\n".join(lines).strip()
 
 
-def build_startup(results, title_prefix="Startup test"):
+def build_report(results, title_prefix="Test run"):
     now = datetime.now(ZoneInfo(TIMEZONE))
     title = f"{title_prefix} - {now.strftime('%d.%m.%Y')}"
 
@@ -366,53 +399,48 @@ def run_once():
 
     logging.info("Checking %d product(s)", len(products))
 
-    first_run = not STATE_PATH.exists()
     state = load_state()
     results = collect(products)
-
-    if first_run and STARTUP_TEST:
-        title, body = build_startup(results)
-        try:
-            send_ntfy(title, body)
-            logging.info("Startup test sent: %s", title)
-        except Exception:
-            logging.exception("Could not send startup test")
-
-    drops = []
     now = datetime.now(ZoneInfo(TIMEZONE)).isoformat()
 
+    items = []
     for result in results:
         offers = result["offers"]
-        if not offers:
-            continue
-
-        current = offers[0]["price"]
         previous = state.get(result["id"], {}).get("last_price")
 
-        if previous is not None and current < previous - 0.005:
-            drops.append({**result, "previous": previous, "current": current})
-            logging.info(
-                "%s: price dropped %s -> %s",
-                result["name"],
-                format_tl(previous),
-                format_tl(current),
-            )
-        elif previous is None:
-            logging.info("%s: baseline %s", result["name"], format_tl(current))
+        if not offers:
+            direction = "failed"
+            current = None
         else:
-            logging.info(
-                "%s: no drop (%s)", result["name"], format_tl(current)
-            )
+            current = offers[0]["price"]
 
-        state[result["id"]] = {"last_price": current, "updated": now}
+            if previous is None:
+                direction = "baseline"
+            elif current < previous - 0.005:
+                direction = "down"
+            elif current > previous + 0.005:
+                direction = "up"
+            else:
+                direction = "same"
+
+            state[result["id"]] = {"last_price": current, "updated": now}
+
+        items.append(
+            {
+                "name": result["name"],
+                "url": result["url"],
+                "offers": offers,
+                "direction": direction,
+                "previous": previous,
+                "current": current,
+            }
+        )
+
+        logging.info("%s: %s", result["name"], direction)
 
     save_state(state)
 
-    if not drops:
-        logging.info("No price drops, not sending a notification")
-        return
-
-    title, body = build_digest(drops)
+    title, body = build_update(items)
 
     try:
         send_ntfy(title, body)
@@ -420,7 +448,7 @@ def run_once():
     except Exception:
         logging.exception("Could not send notification")
 
-    logging.debug("Digest:\n%s", body)
+    logging.debug("Update:\n%s", body)
 
 
 def run_test():
@@ -436,7 +464,7 @@ def run_test():
 
     logging.info("Test run: checking %d product(s)", len(products))
     results = collect(products)
-    title, body = build_startup(results, title_prefix="Test run")
+    title, body = build_report(results)
 
     try:
         send_ntfy(title, body)
