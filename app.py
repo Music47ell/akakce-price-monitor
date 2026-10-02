@@ -234,11 +234,9 @@ def build_update(results):
         counts[result["direction"]] = counts.get(result["direction"], 0) + 1
 
     summary = " ".join(
-        f"{DIRECTION_EMOJI[d]}{counts[d]}"
-        for d in DIRECTION_ORDER
-        if counts.get(d)
+        f"{DIRECTION_EMOJI[d]}{counts.get(d, 0)}" for d in DIRECTION_ORDER
     )
-    title = f"Prices {now.strftime('%d.%m.%Y')} - {summary}"
+    title = f"Prices {now.strftime('%d.%m.%Y')} \u2014 {summary}"
 
     lines = []
     for result in results:
@@ -308,7 +306,6 @@ def send_ntfy(title, body):
         "topic": NTFY_TOPIC,
         "title": title,
         "message": body,
-        "tags": ["money_with_wings"],
         "priority": 3,
     }
 
