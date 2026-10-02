@@ -74,9 +74,11 @@ def load_products():
         for key in ("id", "name", "url"):
             if not product.get(key):
                 raise ValueError(f"Product missing required field: {key}")
-        if product["id"] in seen:
-            raise ValueError(f"Duplicate product id: {product['id']}")
-        seen.add(product["id"])
+        product_id = str(product["id"]).strip()
+        if product_id in seen:
+            raise ValueError(f"Duplicate product id: {product_id}")
+        seen.add(product_id)
+        product["id"] = product_id
 
     return products
 
@@ -234,7 +236,9 @@ def build_update(results):
         counts[result["direction"]] = counts.get(result["direction"], 0) + 1
 
     summary = " ".join(
-        f"{DIRECTION_EMOJI[d]}{counts.get(d, 0)}" for d in DIRECTION_ORDER
+        f"{DIRECTION_EMOJI[d]}{counts[d]}"
+        for d in DIRECTION_ORDER
+        if counts.get(d)
     )
     title = f"Prices {now.strftime('%d.%m.%Y')} \u2014 {summary}"
 
@@ -397,6 +401,12 @@ def run_once():
     logging.info("Checking %d product(s)", len(products))
 
     state = load_state()
+    logging.info(
+        "Loaded %d saved price(s) from %s (exists=%s)",
+        len(state),
+        STATE_PATH,
+        STATE_PATH.exists(),
+    )
     results = collect(products)
     now = datetime.now(ZoneInfo(TIMEZONE)).isoformat()
 
