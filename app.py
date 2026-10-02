@@ -186,6 +186,16 @@ def extract_offers(html):
     return offers
 
 
+UNIT_PRICE_RE = re.compile(
+    r'class="up_v8"[^>]*>\s*([0-9][0-9.,]*\s*TL\s*/\s*[^\s<]+)\s*<'
+)
+
+
+def extract_unit_price(html):
+    match = UNIT_PRICE_RE.search(html)
+    return match.group(1).strip() if match else None
+
+
 def fetch_offers(page, url):
     page.goto(url, timeout=PAGE_LOAD_TIMEOUT, wait_until="domcontentloaded")
 
@@ -210,7 +220,8 @@ def fetch_offers(page, url):
         previous_count = count
 
     challenge = not offers and page_has_challenge(html)
-    return offers, challenge
+    unit = extract_unit_price(html)
+    return offers, challenge, unit
 
 
 def format_tl(value):
@@ -248,22 +259,24 @@ def build_update(results):
         direction = result["direction"]
         current = result["current"]
         previous = result["previous"]
+        unit = result.get("unit")
+        unit_suffix = f" \u00b7 {unit}" if unit else ""
 
         if direction == "failed":
             lines.append(f"{emoji} {result['name']} - no prices found")
         elif direction == "baseline":
             lines.append(
-                f"{emoji} {result['name']} - {format_tl(current)} (baseline)"
+                f"{emoji} {result['name']} - {format_tl(current)} (baseline){unit_suffix}"
             )
         elif direction == "same":
             lines.append(
-                f"{emoji} {result['name']} - {format_tl(current)} (unchanged)"
+                f"{emoji} {result['name']} - {format_tl(current)} (unchanged){unit_suffix}"
             )
         else:
             percent = (current - previous) / previous * 100
             lines.append(
                 f"{emoji} {result['name']} - {format_tl(current)} "
-                f"(was {format_tl(previous)}, {percent:+.1f}%)"
+                f"(was {format_tl(previous)}, {percent:+.1f}%){unit_suffix}"
             )
 
         for index, offer in enumerate(result["offers"][:TOP_DEALS], 1):
@@ -349,12 +362,13 @@ def collect(products):
         try:
             for index, product in enumerate(products):
                 try:
-                    offers, challenge = fetch_offers(page, product["url"])
+                    offers, challenge, unit = fetch_offers(page, product["url"])
                     logging.info(
-                        "%s: %d offer(s)%s",
+                        "%s: %d offer(s)%s%s",
                         product["name"],
                         len(offers),
                         " (Cloudflare challenge)" if challenge else "",
+                        f" [{unit}]" if unit else "",
                     )
                     results.append(
                         {
@@ -363,6 +377,7 @@ def collect(products):
                             "url": product["url"],
                             "offers": offers,
                             "challenge": challenge,
+                            "unit": unit,
                         }
                     )
                 except Exception:
@@ -374,6 +389,7 @@ def collect(products):
                             "url": product["url"],
                             "offers": [],
                             "challenge": False,
+                            "unit": None,
                         }
                     )
 
@@ -440,6 +456,7 @@ def run_once():
                 "direction": direction,
                 "previous": previous,
                 "current": current,
+                "unit": result.get("unit"),
             }
         )
 

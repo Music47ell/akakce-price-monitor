@@ -21,6 +21,7 @@ container.
 - Full seller list per product, including marketplace sellers
 - Top 3 deals per product in one notification
 - **Per-product direction emoji**: 🟩 down · 🟥 up · ⬜ unchanged
+- **Unit price** (e.g. `TL/kg`) shown when Akakçe provides it
 - **A notification every cycle** (and one on every container restart)
 - Persistent state across container restarts (small JSON file, no database)
 - ntfy with optional Bearer-token authentication
@@ -154,22 +155,22 @@ baselines.
 
 ## Notifications
 
-One message is sent every cycle. The title summarizes the directions (counts for
-the directions present):
+One message is sent every cycle. The title summarizes the directions present:
 
 ```text
-Prices 27.09.2026 - 🟩1 🟥1 ⬜1 🆕1 ⚠️1
+Prices 27.09.2026 — ⬜4
 ```
 
 The body lists each product with its direction, current cheapest price, change vs.
-the previous check, and its top 3 deals:
+the previous check, and its top 3 deals. When Akakçe reports a unit price
+("Birim Fiyat", e.g. `TL/kg`), it is appended to the product line:
 
 ```text
-🟩 Bialetti Express 2 Cup - 1.646,10 TL (was 1.737,56 TL, -5.3%)
-   1. Hepsiburada/Venti Gıda - 1.646,10 TL
-   2. n11/ventigida - 1.682,68 TL
-   3. Pazarama/Venti Gıda - 1.737,56 TL
-   https://www.akakce.com/moka-pot/...-936632614.html
+🟩 Eti Lifalif 500 gr Yulaf Ezmesi - 73,99 TL (was 77,95 TL, -5.1%) · 155,90 TL/kg
+   1. Happy Center - 73,99 TL
+   2. Amazon Türkiye - 77,95 TL
+   3. Migros - 77,95 TL
+   https://www.akakce.com/kahvaltilik-gevrek/en-ucuz-eti-lifalif-500-gr-yulaf-ezmesi-fiyati,850418.html
 
 🟥 Another Product - 920,00 TL (was 900,00 TL, +2.2%)
    1. Trendyol/<seller> - 920,00 TL
@@ -282,6 +283,9 @@ publishes versioned tags as well.
   `offers` array, which is parsed for `seller.name` and `price`.
 - Offers are sorted by price; the cheapest is stored for direction detection and the
   cheapest `TOP_DEALS` are included in the notification.
+- The product's unit price ("Birim Fiyat", e.g. `TL/kg`) is read from the rendered
+  markup (`<span class="up_v8">`) when Akakçe provides it, and appended to the
+  product line. It is not part of the JSON-LD offers.
 - Chromium needs shared memory, so the Compose file sets `shm_size: "1gb"` and the
   browser runs with `--no-sandbox` / `--disable-dev-shm-usage`.
 - The image bundles only Playwright's **headless shell** (`playwright install
