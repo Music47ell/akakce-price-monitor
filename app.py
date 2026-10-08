@@ -186,6 +186,100 @@ def extract_offers(html):
     return offers
 
 
+DOM_EXTRACT_JS = r"""
+() => {
+    const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const sellerOf = (scope) => {
+        if (!scope) return '';
+        const vv = scope.querySelector('.v_v8');
+        if (!vv) return '';
+        const img = vv.querySelector('img');
+        const alt = img ? (img.alt || '').trim() : '';
+        const texts = [];
+        vv.childNodes.forEach((n) => {
+            if (n.nodeType === 3) {
+                let t = (n.textContent || '').replace(/\s+/g, ' ').trim();
+                t = t.replace(/^Sat[\u0131i]c[\u0131i]\s*:?\s*/i, '');
+                if (t) texts.push(t);
+            }
+        });
+        let sub = '';
+        for (const t of texts) {
+            if (t.startsWith('/')) sub = t.replace(/^\/+/, '');
+        }
+        if (alt) return (alt + (sub ? '/' + sub : '')).trim();
+        return texts.join(' ').trim();
+    };
+    const offers = [];
+    document.querySelectorAll('.pb_v8').forEach((e) => {
+        let row = e.closest('li') || e.closest('div');
+        while (row && !(row.querySelector && row.querySelector('.v_v8'))) {
+            row = row.parentElement;
+        }
+        const priceEl = e.querySelector('.pt_v8');
+        const shipEl = e.querySelector('.uk_v8');
+        const unitEl = e.querySelector('.up_v8');
+        offers.push({
+            seller: sellerOf(row),
+            price: priceEl ? norm(priceEl.innerText) : '',
+            ship: shipEl ? norm(shipEl.innerText) : '',
+            unit: unitEl ? norm(unitEl.innerText) : ''
+        });
+    });
+    let headline = null;
+    const bb = document.querySelector('.bb_w');
+    if (bb) {
+        const priceEl = bb.querySelector('.pt_v8');
+        const unitEl = bb.querySelector('.up_v8');
+        headline = {
+            seller: sellerOf(bb),
+            price: priceEl ? norm(priceEl.innerText) : '',
+            unit: unitEl ? norm(unitEl.innerText) : ''
+        };
+    }
+    return {offers: offers, headline: headline};
+}
+"""
+
+
+def extract_dom(page):
+    try:
+        data = page.evaluate(DOM_EXTRACT_JS)
+    except Exception:
+        logging.exception("Could not parse offers from the page DOM")
+        return {"offers": [], "headline_price": None, "unit": None}
+
+    offers = []
+    seen = set()
+    for raw in data.get("offers", []):
+        seller = (raw.get("seller") or "").strip()
+        price = parse_price(raw.get("price"))
+        if not seller or price is None:
+            continue
+        key = (seller, round(price, 2))
+        if key in seen:
+            continue
+        seen.add(key)
+        offers.append(
+            {
+                "seller": seller,
+                "price": price,
+                "ship": (raw.get("ship") or "").strip(),
+            }
+        )
+    offers.sort(key=lambda item: item["price"])
+
+    headline = data.get("headline") or {}
+    headline_price = parse_price(headline.get("price")) if isinstance(headline, dict) else None
+    unit = (headline.get("unit") or "").strip() if isinstance(headline, dict) else ""
+
+    return {
+        "offers": offers,
+        "headline_price": headline_price,
+        "unit": unit or None,
+    }
+
+
 UNIT_PRICE_RE = re.compile(
     r'class="up_v8"[^>]*>\s*([0-9][0-9.,]*\s*TL\s*/\s*[^\s<]+)\s*<'
 )
@@ -199,7 +293,7 @@ def extract_unit_price(html):
 def fetch_offers(page, url):
     page.goto(url, timeout=PAGE_LOAD_TIMEOUT, wait_until="domcontentloaded")
 
-    offers = []
+    dom = {"offers": [], "headline_price": None, "unit": None}
     html = ""
     previous_count = -1
     stable = 0
@@ -207,8 +301,8 @@ def fetch_offers(page, url):
     for _ in range(30):
         page.wait_for_timeout(1000)
         html = page.content()
-        offers = extract_offers(html)
-        count = len(offers)
+        dom = extract_dom(page)
+        count = len(dom["offers"])
 
         if count > 0 and count == previous_count:
             stable += 1
@@ -219,9 +313,20 @@ def fetch_offers(page, url):
 
         previous_count = count
 
+    offers = dom["offers"]
+    unit = dom["unit"]
+    tracked = dom["headline_price"]
+
+    if not offers:
+        # Fallback: JSON-LD offers (partial, but better than nothing)
+        offers = [dict(o, ship="") for o in extract_offers(html)]
+        if unit is None:
+            unit = extract_unit_price(html)
+        if offers:
+            tracked = offers[0]["price"]
+
     challenge = not offers and page_has_challenge(html)
-    unit = extract_unit_price(html)
-    return offers, challenge, unit
+    return offers, challenge, unit, tracked
 
 
 def format_tl(value):
@@ -280,8 +385,15 @@ def build_update(results):
             )
 
         for index, offer in enumerate(result["offers"][:TOP_DEALS], 1):
+            ship = (offer.get("ship") or "").strip()
+            if ship:
+                note = "ücretsiz kargo" if "ücretsiz" in ship.lower() else ship
+                ship_note = f" ({note})"
+            else:
+                ship_note = ""
             lines.append(
-                f"   {index}. {offer['seller']} - {format_tl(offer['price'])}"
+                f"   {index}. {offer['seller']} - "
+                f"{format_tl(offer['price'])}{ship_note}"
             )
 
         lines.append(f"   {result['url']}")
@@ -362,7 +474,9 @@ def collect(products):
         try:
             for index, product in enumerate(products):
                 try:
-                    offers, challenge, unit = fetch_offers(page, product["url"])
+                    offers, challenge, unit, tracked = fetch_offers(
+                        page, product["url"]
+                    )
                     logging.info(
                         "%s: %d offer(s)%s%s",
                         product["name"],
@@ -378,6 +492,7 @@ def collect(products):
                             "offers": offers,
                             "challenge": challenge,
                             "unit": unit,
+                            "tracked": tracked,
                         }
                     )
                 except Exception:
@@ -390,6 +505,7 @@ def collect(products):
                             "offers": [],
                             "challenge": False,
                             "unit": None,
+                            "tracked": None,
                         }
                     )
 
@@ -435,7 +551,9 @@ def run_once():
             direction = "failed"
             current = None
         else:
-            current = offers[0]["price"]
+            current = result.get("tracked")
+            if current is None:
+                current = offers[0]["price"]
 
             if previous is None:
                 direction = "baseline"

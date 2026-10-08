@@ -137,10 +137,10 @@ Akakçe product `url`.
 
 ## How directions are detected
 
-- Each cycle, the service records the **cheapest offer** for every product in
-  `STATE_PATH` (`/data/state.json`, persisted at
+- Each cycle, the service records the **shipping-included ("kargo dahil") cheapest
+  price** for every product in `STATE_PATH` (`/data/state.json`, persisted at
   `/opt/docker/data/akakce-price-monitor` on the host).
-- It compares the current cheapest to the last recorded one and marks each product:
+- It compares the current price to the last recorded one and marks each product:
   - 🟩 **down** — cheaper than the last check
   - 🟥 **up** — more expensive than the last check
   - ⬜ **same** — unchanged (within 0.005 TL)
@@ -161,16 +161,17 @@ One message is sent every cycle. The title summarizes the directions present:
 Prices 27.09.2026 — ⬜4
 ```
 
-The body lists each product with its direction, current cheapest price, change vs.
-the previous check, and its top 3 deals. When Akakçe reports a unit price
-("Birim Fiyat", e.g. `TL/kg`), it is appended to the product line:
+The body lists each product with its direction, the current **shipping-included**
+cheapest price, the change vs. the previous check, its unit price (when Akakçe
+provides one), and its top 3 seller offers. Seller lines are the cheapest offers by
+product price; shipping is shown where Akakçe reports it:
 
 ```text
-🟩 Eti Lifalif 500 gr Yulaf Ezmesi - 73,99 TL (was 77,95 TL, -5.1%) · 155,90 TL/kg
+🟩 Eti Lifalif 500 gr Yulaf Ezmesi - 74,05 TL (was 77,95 TL, -5.0%) · 148,10 TL/kg
    1. Happy Center - 73,99 TL
-   2. Amazon Türkiye - 77,95 TL
+   2. Amazon Türkiye - 74,05 TL (ücretsiz kargo)
    3. Migros - 77,95 TL
-   https://www.akakce.com/kahvaltilik-gevrek/en-ucuz-eti-lifalif-500-gr-yulaf-ezmesi-fiyati,850418.html
+   https://www.akakce.com/kahvaltilik-gevrek/...850418.html
 
 🟥 Another Product - 920,00 TL (was 900,00 TL, +2.2%)
    1. Trendyol/<seller> - 920,00 TL
@@ -278,14 +279,17 @@ publishes versioned tags as well.
 
 ## How it works / scraping notes
 
-- Each product page is rendered with headless Chromium (Playwright). Akakçe's
-  offers hydrate client-side and end up in the page's `application/ld+json`
-  `offers` array, which is parsed for `seller.name` and `price`.
-- Offers are sorted by price; the cheapest is stored for direction detection and the
-  cheapest `TOP_DEALS` are included in the notification.
+- Each product page is rendered with headless Chromium (Playwright). Offers are
+  parsed from the **rendered DOM** (`.pb_v8` rows): price (`.pt_v8`), shipping
+  (`.uk_v8`), and seller name (`.v_v8` logo `alt` + optional `/subseller` text).
+  The DOM carries the **full** seller list; the JSON-LD `offers` array only holds a
+  rotating subset of ~10, so it is used only as a fallback.
+- The tracked price is Akakçe's **"kargo dahil en ucuz"** headline (`.bb_w`,
+  shipping-included). Seller lines show the cheapest `TOP_DEALS` offers by product
+  price, with shipping where Akakçe reports it.
 - The product's unit price ("Birim Fiyat", e.g. `TL/kg`) is read from the rendered
   markup (`<span class="up_v8">`) when Akakçe provides it, and appended to the
-  product line. It is not part of the JSON-LD offers.
+  product line.
 - Chromium needs shared memory, so the Compose file sets `shm_size: "1gb"` and the
   browser runs with `--no-sandbox` / `--disable-dev-shm-usage`.
 - The image bundles only Playwright's **headless shell** (`playwright install
