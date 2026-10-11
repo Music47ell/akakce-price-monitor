@@ -582,7 +582,12 @@ def run_once():
 
     save_state(state)
 
-    title, body = build_update(items)
+    changed = [item for item in items if item["direction"] != "same"]
+    if not changed:
+        logging.info("No price changes; not sending a notification")
+        return
+
+    title, body = build_update(changed)
 
     try:
         send_ntfy(title, body)

@@ -3,9 +3,8 @@
 [![Build and publish image](https://github.com/Music47ell/akakce-price-monitor/actions/workflows/docker.yml/badge.svg)](https://github.com/Music47ell/akakce-price-monitor/actions/workflows/docker.yml)
 
 A small Docker service that periodically renders Akakçe product pages in a
-headless browser, collects every seller offer, and **notifies you on ntfy every
-cycle** with a single message listing each product's top 3 deals and whether its
-price went up, down, or stayed the same.
+headless browser, collects every seller offer, and **notifies you on ntfy when a
+price changes** — one message listing the changed products with their top 3 deals.
 
 Because Akakçe loads its full seller list client-side (via a Cloudflare-protected
 API), the page is rendered with a real browser (Playwright/Chromium). This is what
@@ -22,7 +21,7 @@ container.
 - Top 3 deals per product in one notification
 - **Per-product direction emoji**: 🟩 down · 🟥 up · ⬜ unchanged
 - **Unit price** (e.g. `TL/kg`) shown when Akakçe provides it
-- **A notification every cycle** (and one on every container restart)
+- **Notifies only when something changed** (skips cycles where every price is unchanged)
 - Persistent state across container restarts (small JSON file, no database)
 - ntfy with optional Bearer-token authentication
 - Configurable polling interval (default: every 6 hours)
@@ -146,19 +145,21 @@ Akakçe product `url`.
   - ⬜ **same** — unchanged (within 0.005 TL)
   - 🆕 **baseline** — first time seen (no previous price)
   - ⚠️ **failed** — no prices fetched (e.g. a Cloudflare challenge)
-- A notification is sent **every cycle**, whether or not anything changed.
-- This cycle runs immediately on startup, so **restarting the container sends a
-  notification** with the current prices.
+- A notification is sent **only when at least one product changed** — i.e. when any
+  product is 🟩 down, 🟥 up, 🆕 baseline, or ⚠️ failed. If **every** product is ⬜
+  same, nothing is sent.
+- The message lists **only the products that changed** (unchanged ones are omitted).
 
 No database is required — the state is a tiny JSON file. Delete it to reset all
 baselines.
 
 ## Notifications
 
-One message is sent every cycle. The title summarizes the directions present:
+A message is sent only when something changed, and it lists only the changed
+products. The title summarizes the directions present:
 
 ```text
-Prices 27.09.2026 — ⬜4
+Prices 11.10.2026 — 🟩1 🟥1
 ```
 
 The body lists each product with its direction, the current **shipping-included**
@@ -178,12 +179,6 @@ product price; shipping is shown where Akakçe reports it:
    2. Hepsiburada/<seller> - 940,00 TL
    3. <seller> - 950,00 TL
    https://www.akakce.com/some-product-fiyati,123456.html
-
-⬜ Third Product - 500,00 TL (unchanged)
-   1. <seller> - 500,00 TL
-   2. <seller> - 510,00 TL
-   3. <seller> - 520,00 TL
-   https://www.akakce.com/...
 
 🆕 New Product - 300,00 TL (baseline)
    1. <seller> - 300,00 TL
@@ -237,8 +232,9 @@ Stop:
 docker compose down
 ```
 
-A notification is sent immediately on startup and every `CHECK_INTERVAL_SECONDS`
-after that, so a reminder of the current prices arrives on every restart.
+A cycle runs immediately on startup and every `CHECK_INTERVAL_SECONDS` after that.
+A notification is sent only when at least one product changed, so restarts with
+unchanged prices send nothing.
 
 ### Updating
 
