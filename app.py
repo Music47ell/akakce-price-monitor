@@ -25,35 +25,48 @@ logging.basicConfig(
 )
 
 
+def getenv(name, default=""):
+    value = os.getenv(name)
+    if value is None:
+        target = name.upper()
+        for key, candidate in os.environ.items():
+            if key.upper() == target:
+                value = candidate
+                break
+    return default if value is None else value
+
+
 def require_env(name):
-    value = os.getenv(name, "").strip()
+    value = getenv(name).strip()
     if not value:
         logging.error(
             "Missing required environment variable %s. Set it in your "
             "orchestrator (e.g. Dockhand's env section).",
             name,
         )
+        present = sorted(k for k in os.environ if k.isupper())
+        logging.error("Environment variable names present: %s", ", ".join(present))
         raise SystemExit(1)
     return value
 
 
-PRODUCTS_PATH = Path(os.getenv("PRODUCTS_PATH", "/data/products.json"))
-LEGACY_PRODUCTS_PATH = Path(os.getenv("LEGACY_PRODUCTS_PATH", "/config/products.yml"))
-STATE_PATH = Path(os.getenv("STATE_PATH", "/data/state.json"))
+PRODUCTS_PATH = Path(getenv("PRODUCTS_PATH", "/data/products.json"))
+LEGACY_PRODUCTS_PATH = Path(getenv("LEGACY_PRODUCTS_PATH", "/config/products.yml"))
+STATE_PATH = Path(getenv("STATE_PATH", "/data/state.json"))
 
-UI_PASSWORD_HASH = os.getenv("UI_PASSWORD_HASH", "").strip()
-UI_PORT = int(os.getenv("UI_PORT", "8080"))
+UI_PASSWORD_HASH = getenv("UI_PASSWORD_HASH").strip()
+UI_PORT = int(getenv("UI_PORT", "8080"))
 
 NTFY_URL = require_env("NTFY_URL").rstrip("/")
 NTFY_TOPIC = require_env("NTFY_TOPIC")
-NTFY_TOKEN = os.getenv("NTFY_TOKEN", "")
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL_SECONDS", "21600"))
-TIMEOUT = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "30"))
-REQUEST_DELAY = float(os.getenv("REQUEST_DELAY_SECONDS", "3"))
-TOP_DEALS = int(os.getenv("TOP_DEALS", "3"))
-TIMEZONE = os.getenv("TIMEZONE", "Europe/Istanbul")
-PAGE_LOAD_TIMEOUT = int(os.getenv("PAGE_LOAD_TIMEOUT_SECONDS", "60000"))
-USER_AGENT = os.getenv(
+NTFY_TOKEN = getenv("NTFY_TOKEN")
+CHECK_INTERVAL = int(getenv("CHECK_INTERVAL_SECONDS", "21600"))
+TIMEOUT = int(getenv("REQUEST_TIMEOUT_SECONDS", "30"))
+REQUEST_DELAY = float(getenv("REQUEST_DELAY_SECONDS", "3"))
+TOP_DEALS = int(getenv("TOP_DEALS", "3"))
+TIMEZONE = getenv("TIMEZONE", "Europe/Istanbul")
+PAGE_LOAD_TIMEOUT = int(getenv("PAGE_LOAD_TIMEOUT_SECONDS", "60000"))
+USER_AGENT = getenv(
     "USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
