@@ -69,11 +69,11 @@ def _clear_fails(ip):
     _LOGIN_FAILS.pop(ip, None)
 
 
-def _page(title, body):
+def _page(title, body, head_extra=""):
     return (
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        f"<title>{escape(title)}</title><style>"
+        f"<title>{escape(title)}</title>{head_extra}<style>"
         "body{font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:820px;"
         "margin:2rem auto;padding:0 1rem;color:#222;background:#fafafa}"
         "h1{font-size:1.3rem}table{border-collapse:collapse;width:100%;background:#fff}"
@@ -82,7 +82,8 @@ def _page(title, body):
         "input[type=text],input[type=password]{width:100%;padding:.5rem;box-sizing:border-box}"
         "button{padding:.5rem .9rem;cursor:pointer}"
         ".row{display:flex;gap:.5rem;margin:.8rem 0}.muted{color:#888}"
-        ".err{color:#c00;margin:.5rem 0}form.inline{display:inline}</style></head><body>"
+        ".err{color:#c00;margin:.5rem 0}.ok{color:#080;margin:.5rem 0}"
+        "form.inline{display:inline}</style></head><body>"
         f"{body}</body></html>"
     )
 
@@ -155,7 +156,8 @@ class Handler(BaseHTTPRequestHandler):
     # -- routing ---------------------------------------------------------
     def do_GET(self):
         _prune()
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path == "/favicon.ico":
             self._send("", status=204)
             return
@@ -173,7 +175,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._session():
                 self._redirect("/login")
                 return
-            self._send(_products_page(self._session()))
+            checking = "check" in parse_qs(parsed.query)
+            self._send(_products_page(self._session(), checking=checking))
             return
         self._send(_page("Not found", "<h1>Not found</h1>"), status=404)
 
@@ -197,7 +200,7 @@ class Handler(BaseHTTPRequestHandler):
             self._remove(form)
         elif path == "/check":
             app.request_check()
-            self._redirect("/")
+            self._redirect("/?check=1")
         else:
             self._send(_page("Not found", "<h1>Not found</h1>"), status=404)
 
@@ -252,11 +255,18 @@ def _login_page(error=""):
     )
 
 
-def _products_page(session, error=""):
+def _products_page(session, error="", checking=False):
     state = app.load_state()
     products = app.load_products()
 
     error_html = f"<p class='err'>{escape(error)}</p>" if error else ""
+    banner = (
+        "<p class='ok'>Check requested. This page refreshes shortly — a "
+        "notification is only sent if a price changed.</p>"
+        if checking
+        else ""
+    )
+    head_extra = '<meta http-equiv="refresh" content="15; url=/">' if checking else ""
     rows = []
     for product in products:
         entry = state.get(product["id"], {})
@@ -283,7 +293,7 @@ def _products_page(session, error=""):
 
     body = (
         "<h1>Monitored products</h1>"
-        f"{error_html}"
+        f"{banner}{error_html}"
         "<form method='post' action='/add'>"
         f"<input type='hidden' name='csrf' value='{escape(session['csrf'])}'>"
         "<div class='row'>"
@@ -296,7 +306,7 @@ def _products_page(session, error=""):
         "<p><button type='submit'>Check now</button>"
         " <a href='/logout'>Log out</a></p></form>"
     )
-    return _page("Products", body)
+    return _page("Products", body, head_extra)
 
 
 def start_web_thread():

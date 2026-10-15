@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import secrets
+import sys
 import threading
 import time
 from datetime import datetime
@@ -78,6 +79,7 @@ CHECK_EVENT = threading.Event()
 
 def request_check():
     CHECK_EVENT.set()
+    logging.info("Check requested")
 
 CHALLENGE_MARKERS = (
     "just a moment",
@@ -837,13 +839,21 @@ def main():
         run_test()
         return
 
+    # Ensure webui.py shares THIS module instance (when run as `python app.py`
+    # the module is `__main__`, so a plain `import app` in webui would load a
+    # second copy with its own CHECK_EVENT).
+    sys.modules.setdefault("app", sys.modules[__name__])
+
     import webui
 
     webui.start_web_thread()
 
     while True:
         CHECK_EVENT.clear()
-        run_once()
+        try:
+            run_once()
+        except Exception:
+            logging.exception("Check cycle failed")
         logging.info("Next check in %d seconds", CHECK_INTERVAL)
         CHECK_EVENT.wait(CHECK_INTERVAL)
 
