@@ -18,9 +18,11 @@ services:
       TOP_DEALS: ${TOP_DEALS:-3}
       TIMEZONE: ${TIMEZONE:-Europe/Istanbul}
       PAGE_LOAD_TIMEOUT_SECONDS: ${PAGE_LOAD_TIMEOUT_SECONDS:-60000}
+      UI_PASSWORD_HASH: ${UI_PASSWORD_HASH:-}
+      UI_PORT: ${UI_PORT:-8080}
     volumes:
       - /opt/docker/data/akakce-price-monitor:/data
-      - /opt/docker/data/akakce-price-monitor/config:/config
+      - /opt/docker/data/akakce-price-monitor/config:/config:ro
     networks:
       - tunnel-net
 

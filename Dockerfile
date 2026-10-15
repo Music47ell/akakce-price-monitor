@@ -7,6 +7,6 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && playwright install --with-deps --only-shell --no-progress chromium \
     && rm -rf /var/lib/apt/lists/*
 
-COPY app.py .
+COPY app.py webui.py ./
 
 CMD ["python", "-u", "app.py"]

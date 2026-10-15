@@ -1,10 +1,17 @@
 import argparse
+import base64
+import getpass
+import hashlib
+import hmac
 import json
 import logging
 import os
 import re
+import secrets
+import threading
 import time
 from datetime import datetime
+from html import unescape
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -30,8 +37,12 @@ def require_env(name):
     return value
 
 
-PRODUCTS_PATH = Path(os.getenv("PRODUCTS_PATH", "/config/products.yml"))
+PRODUCTS_PATH = Path(os.getenv("PRODUCTS_PATH", "/data/products.json"))
+LEGACY_PRODUCTS_PATH = Path(os.getenv("LEGACY_PRODUCTS_PATH", "/config/products.yml"))
 STATE_PATH = Path(os.getenv("STATE_PATH", "/data/state.json"))
+
+UI_PASSWORD_HASH = os.getenv("UI_PASSWORD_HASH", "").strip()
+UI_PORT = int(os.getenv("UI_PORT", "8080"))
 
 NTFY_URL = require_env("NTFY_URL").rstrip("/")
 NTFY_TOPIC = require_env("NTFY_TOPIC")
@@ -48,6 +59,13 @@ USER_AGENT = os.getenv(
     "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
 )
 
+# Set by the web UI ("Check now" / add) to wake the monitor loop early.
+CHECK_EVENT = threading.Event()
+
+
+def request_check():
+    CHECK_EVENT.set()
+
 CHALLENGE_MARKERS = (
     "just a moment",
     "attention required",
@@ -62,25 +80,115 @@ def page_has_challenge(html):
     return any(marker in low for marker in CHALLENGE_MARKERS)
 
 
-def load_products():
-    with PRODUCTS_PATH.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    products = data.get("products") or []
-    if not isinstance(products, list):
-        raise ValueError("products must be a YAML list")
+def new_id():
+    return secrets.token_hex(4)
 
+
+def _read_products_json():
+    try:
+        with PRODUCTS_PATH.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        logging.exception("Could not read %s", PRODUCTS_PATH)
+        return []
+
+    if not isinstance(data, list):
+        logging.error("%s must contain a JSON list", PRODUCTS_PATH)
+        return []
+
+    products = []
     seen = set()
-    for product in products:
-        for key in ("id", "name", "url"):
-            if not product.get(key):
-                raise ValueError(f"Product missing required field: {key}")
-        product_id = str(product["id"]).strip()
-        if product_id in seen:
-            raise ValueError(f"Duplicate product id: {product_id}")
-        seen.add(product_id)
-        product["id"] = product_id
-
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+        pid = str(item.get("id") or "").strip() or new_id()
+        if pid in seen:
+            pid = new_id()
+        seen.add(pid)
+        products.append({"id": pid, "url": url})
     return products
+
+
+def _migrate_legacy():
+    try:
+        with LEGACY_PRODUCTS_PATH.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except Exception:
+        logging.exception("Could not read legacy %s", LEGACY_PRODUCTS_PATH)
+        return []
+
+    products = []
+    seen = set()
+    for item in data.get("products") or []:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+        pid = str(item.get("id") or "").strip() or new_id()
+        if pid in seen:
+            pid = new_id()
+        seen.add(pid)
+        products.append({"id": pid, "url": url})
+    return products
+
+
+def load_products():
+    if PRODUCTS_PATH.exists():
+        return _read_products_json()
+
+    if LEGACY_PRODUCTS_PATH.exists():
+        products = _migrate_legacy()
+        if products:
+            save_products(products)
+            logging.info(
+                "Migrated %d product(s) from %s to %s",
+                len(products), LEGACY_PRODUCTS_PATH, PRODUCTS_PATH,
+            )
+        return products
+
+    return []
+
+
+def save_products(products):
+    PRODUCTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = PRODUCTS_PATH.with_name(PRODUCTS_PATH.name + ".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(products, f, ensure_ascii=False, indent=2)
+    tmp.replace(PRODUCTS_PATH)
+
+
+PBKDF2_ALGO = "pbkdf2_sha256"
+PBKDF2_ITERATIONS = 600000
+
+
+def hash_password(password, iterations=PBKDF2_ITERATIONS):
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return "{}${}${}${}".format(
+        PBKDF2_ALGO,
+        iterations,
+        base64.b64encode(salt).decode("ascii"),
+        base64.b64encode(digest).decode("ascii"),
+    )
+
+
+def verify_password(password, encoded):
+    try:
+        algo, iterations, salt_b64, digest_b64 = encoded.split("$")
+        if algo != PBKDF2_ALGO:
+            return False
+        salt = base64.b64decode(salt_b64)
+        expected = base64.b64decode(digest_b64)
+        digest = hashlib.pbkdf2_hmac(
+            "sha256", password.encode("utf-8"), salt, int(iterations)
+        )
+        return hmac.compare_digest(digest, expected)
+    except Exception:
+        return False
 
 
 def load_state():
@@ -290,6 +398,49 @@ def extract_unit_price(html):
     return match.group(1).strip() if match else None
 
 
+def _find_product_name(node):
+    if isinstance(node, dict):
+        node_type = node.get("@type")
+        types = node_type if isinstance(node_type, list) else [node_type]
+        name = node.get("name")
+        if "Product" in types and isinstance(name, str) and name.strip():
+            return name.strip()
+        for value in node.values():
+            found = _find_product_name(value)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for value in node:
+            found = _find_product_name(value)
+            if found:
+                return found
+    return None
+
+
+def extract_name(html):
+    for raw in re.findall(r'application/ld\+json[^>]*>(.*?)</script>', html, re.S):
+        try:
+            data = json.loads(raw.strip())
+        except Exception:
+            continue
+        name = _find_product_name(data)
+        if name:
+            return name
+
+    match = re.search(
+        r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)', html, re.I
+    )
+    if match:
+        return unescape(match.group(1)).strip()
+
+    match = re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
+    if match:
+        title = unescape(match.group(1)).strip()
+        return re.split(r"\s+Fiyat", title)[0].strip()
+
+    return None
+
+
 def fetch_offers(page, url):
     page.goto(url, timeout=PAGE_LOAD_TIMEOUT, wait_until="domcontentloaded")
 
@@ -325,8 +476,9 @@ def fetch_offers(page, url):
         if offers:
             tracked = offers[0]["price"]
 
+    name = extract_name(html)
     challenge = not offers and page_has_challenge(html)
-    return offers, challenge, unit, tracked
+    return offers, challenge, unit, tracked, name
 
 
 def format_tl(value):
@@ -473,13 +625,12 @@ def collect(products):
 
         try:
             for index, product in enumerate(products):
+                url = product["url"]
                 try:
-                    offers, challenge, unit, tracked = fetch_offers(
-                        page, product["url"]
-                    )
+                    offers, challenge, unit, tracked, name = fetch_offers(page, url)
                     logging.info(
                         "%s: %d offer(s)%s%s",
-                        product["name"],
+                        name or url,
                         len(offers),
                         " (Cloudflare challenge)" if challenge else "",
                         f" [{unit}]" if unit else "",
@@ -487,8 +638,8 @@ def collect(products):
                     results.append(
                         {
                             "id": product["id"],
-                            "name": product["name"],
-                            "url": product["url"],
+                            "name": name or url,
+                            "url": url,
                             "offers": offers,
                             "challenge": challenge,
                             "unit": unit,
@@ -496,12 +647,12 @@ def collect(products):
                         }
                     )
                 except Exception:
-                    logging.exception("%s: fetch failed", product["name"])
+                    logging.exception("%s: fetch failed", url)
                     results.append(
                         {
                             "id": product["id"],
-                            "name": product["name"],
-                            "url": product["url"],
+                            "name": url,
+                            "url": url,
                             "offers": [],
                             "challenge": False,
                             "unit": None,
@@ -545,11 +696,17 @@ def run_once():
     items = []
     for result in results:
         offers = result["offers"]
-        previous = state.get(result["id"], {}).get("last_price")
+        product_id = result["id"]
+        previous = state.get(product_id, {}).get("last_price")
 
         if not offers:
             direction = "failed"
             current = None
+            entry = state.get(product_id, {})
+            entry["direction"] = direction
+            if not entry.get("name"):
+                entry["name"] = result["name"]
+            state[product_id] = entry
         else:
             current = result.get("tracked")
             if current is None:
@@ -564,7 +721,12 @@ def run_once():
             else:
                 direction = "same"
 
-            state[result["id"]] = {"last_price": current, "updated": now}
+            state[product_id] = {
+                "last_price": current,
+                "updated": now,
+                "name": result["name"],
+                "direction": direction,
+            }
 
         items.append(
             {
@@ -636,16 +798,38 @@ def main():
         help="Run a one-off price check, send the result, then exit. "
         "Does not read or write saved state.",
     )
+    parser.add_argument(
+        "--hash-password",
+        action="store_true",
+        help="Prompt for a password, print its hash for UI_PASSWORD_HASH, then exit.",
+    )
     args = parser.parse_args()
+
+    if args.hash_password:
+        password = getpass.getpass("Password: ")
+        confirm = getpass.getpass("Confirm: ")
+        if password != confirm:
+            print("Passwords do not match")
+            raise SystemExit(1)
+        if not password:
+            print("Empty password")
+            raise SystemExit(1)
+        print(hash_password(password))
+        return
 
     if args.test:
         run_test()
         return
 
+    import webui
+
+    webui.start_web_thread()
+
     while True:
+        CHECK_EVENT.clear()
         run_once()
         logging.info("Next check in %d seconds", CHECK_INTERVAL)
-        time.sleep(CHECK_INTERVAL)
+        CHECK_EVENT.wait(CHECK_INTERVAL)
 
 
 if __name__ == "__main__":
