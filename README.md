@@ -143,6 +143,12 @@ or from a running container:
 docker exec -it akakce-price-monitor python -u app.py --hash-password
 ```
 
+Or generate it anywhere, without this image (plain Python):
+
+```bash
+docker run --rm -it python:3.13-slim python -c "import getpass,hashlib,base64,secrets; p=getpass.getpass('Password: ').encode(); s=secrets.token_bytes(16); print('pbkdf2_sha256$600000$'+base64.b64encode(s).decode()+'$'+base64.b64encode(hashlib.pbkdf2_hmac('sha256',p,s,600000)).decode())"
+```
+
 If `UI_PASSWORD_HASH` is empty, the web UI is disabled (the monitor still runs).
 
 ### Migrating from products.yml

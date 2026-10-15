@@ -57,8 +57,8 @@ STATE_PATH = Path(getenv("STATE_PATH", "/data/state.json"))
 UI_PASSWORD_HASH = getenv("UI_PASSWORD_HASH").strip()
 UI_PORT = int(getenv("UI_PORT", "8080"))
 
-NTFY_URL = require_env("NTFY_URL").rstrip("/")
-NTFY_TOPIC = require_env("NTFY_TOPIC")
+NTFY_URL = getenv("NTFY_URL").rstrip("/")
+NTFY_TOPIC = getenv("NTFY_TOPIC")
 NTFY_TOKEN = getenv("NTFY_TOKEN")
 CHECK_INTERVAL = int(getenv("CHECK_INTERVAL_SECONDS", "21600"))
 TIMEOUT = int(getenv("REQUEST_TIMEOUT_SECONDS", "30"))
@@ -829,6 +829,9 @@ def main():
             raise SystemExit(1)
         print(hash_password(password))
         return
+
+    require_env("NTFY_URL")
+    require_env("NTFY_TOPIC")
 
     if args.test:
         run_test()
