@@ -183,7 +183,7 @@ PBKDF2_ITERATIONS = 600000
 def hash_password(password, iterations=PBKDF2_ITERATIONS):
     salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
-    return "{}${}${}${}".format(
+    return "{}:{}:{}:{}".format(
         PBKDF2_ALGO,
         iterations,
         base64.b64encode(salt).decode("ascii"),
@@ -192,18 +192,26 @@ def hash_password(password, iterations=PBKDF2_ITERATIONS):
 
 
 def verify_password(password, encoded):
-    try:
-        algo, iterations, salt_b64, digest_b64 = encoded.split("$")
+    # Accept both ":" and legacy "$" separators. ":" is used because "$" is
+    # interpreted by Docker Compose interpolation and would be blanked out.
+    for separator in (":", "$"):
+        try:
+            algo, iterations, salt_b64, digest_b64 = encoded.split(separator)
+        except ValueError:
+            continue
         if algo != PBKDF2_ALGO:
-            return False
-        salt = base64.b64decode(salt_b64)
-        expected = base64.b64decode(digest_b64)
-        digest = hashlib.pbkdf2_hmac(
-            "sha256", password.encode("utf-8"), salt, int(iterations)
-        )
-        return hmac.compare_digest(digest, expected)
-    except Exception:
-        return False
+            continue
+        try:
+            salt = base64.b64decode(salt_b64)
+            expected = base64.b64decode(digest_b64)
+            digest = hashlib.pbkdf2_hmac(
+                "sha256", password.encode("utf-8"), salt, int(iterations)
+            )
+        except Exception:
+            continue
+        if hmac.compare_digest(digest, expected):
+            return True
+    return False
 
 
 def load_state():
